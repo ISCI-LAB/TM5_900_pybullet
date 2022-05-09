@@ -4,6 +4,7 @@
 
 import random
 import os
+from re import I
 import time
 import sys
 
@@ -158,13 +159,14 @@ class SimulatedYCBEnv():
         # Set table and plane
         plane_file = os.path.join(self.root_dir,  'data/objects/floor/model_normalized.urdf')  # _white
         table_file = os.path.join(self.root_dir,  'data/objects/table/models/model_normalized.urdf')
+        
 
         self.obj_path = [plane_file, table_file]
         self.plane_id = p.loadURDF(plane_file, [0 - self._shift[0], 0 - self._shift[1], -.82 - self._shift[2]])
         self.table_pos = np.array([0.5 - self._shift[0], 0.0 - self._shift[1], -.82 - self._shift[2]])
         self.table_id = p.loadURDF(table_file, self.table_pos[0], self.table_pos[1], self.table_pos[2],
                                    0.707, 0., 0., 0.707)
-
+        
         # Intialize robot and objects
         if init_joints is None:
             self._panda = TM5(stepsize=self._timeStep, base_shift=self._shift)
@@ -293,8 +295,7 @@ class SimulatedYCBEnv():
 
         self._panda.reset(init_joints)
         self.place_back_objects()
-        self._randomly_place_objects(self._get_random_object(self._numObjects), scale=1)
-
+        self._randomly_place_objects(self._get_random_object(self._numObjects), scale=1)   
         self._env_step = 0
         self.retracted = False
         self.collided = False
@@ -304,7 +305,7 @@ class SimulatedYCBEnv():
 
         observation = self.enforce_face_target() if enforce_face_target else self._get_observation()
         return observation
-
+    
     def place_back_objects(self):
         for idx, obj in enumerate(self._objectUids):
             if self.placed_objects[idx]:
@@ -381,7 +382,7 @@ class SimulatedYCBEnv():
         return False
 
 ########## TBD ##########
-    def _randomly_place_objects_pack(self, urdfList, scale, poses=None):
+    def _randomly_place_objects_pack(self, urdfList, scale, poses=None, if_stack = True):
         '''
         Input:
             urdfList: File path of mesh urdf, support single and multiple object list
@@ -394,6 +395,125 @@ class SimulatedYCBEnv():
                 (1) reset position of pybullet body in urdfList
                 (2) set self.placed_objects[idx] = True
         '''
+        if len(urdfList) == 1:
+            return  self._randomly_place_objects(urdfList = urdfList, scale = scale, poses = poses)
+        else:
+            # object_list = []
+            # for i in range(len(urdfList)):
+            #     while(1):
+            #         tmp = self._get_random_object(self._numObjects)
+            #         if(tmp not in object_list):
+            #             break
+            #     object_list.append(tmp)
+            # self._randomly_place_objects_pack(object_list, scale=1)       
+            if if_stack:
+                self.place_back_objects()
+                for i in range(len(urdfList)):
+                    if i == 0:
+                        xpos = 0.5 - self._shift[0]
+                        ypos = -self._shift[0]
+                    else:
+                        spare = False
+                        while not spare:
+                            spare = True
+                            xpos = 0.5 + 0.28 * (random.random() - 0.5) - self._shift[0]
+                            ypos = 0.9 * self._blockRandom * (random.random() - 0.5) - self._shift[0]
+                            for idx in range(len(self.placed_objects)):
+                                if  self.placed_objects[idx]:
+                                    pos, _ = p.getBasePositionAndOrientation(self._objectUids[idx])
+                                    if (xpos-pos[0])**2+(ypos-pos[1])**2 < 0.0175:
+                                        spare = False
+                    obj_path = '/'.join(urdfList[i][0].split('/')[:-1]) + '/'
+                    self.target_idx = self.obj_path.index(os.path.join(self.root_dir, obj_path))
+                    self.placed_objects[self.target_idx] = True
+                    self.target_name = urdfList[i][0].split('/')[-2]
+                    x_rot = 0
+                    z_init = -.65 + 1.82 * self.object_heights[self.target_idx]
+                    orn = p.getQuaternionFromEuler([x_rot, 0, np.random.uniform(-np.pi, np.pi)])
+                    p.resetBasePositionAndOrientation(self._objectUids[self.target_idx],
+                                                    [xpos, ypos,  z_init - self._shift[2]], [orn[0], orn[1], orn[2], orn[3]])
+                    p.resetBaseVelocity(
+                        self._objectUids[self.target_idx], (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)
+                    )
+                    for _ in range(400):
+                        p.stepSimulation()
+                for _ in range(2000):
+                    p.stepSimulation()
+
+                pos, new_orn = p.getBasePositionAndOrientation(self._objectUids[self.target_idx])  # to target
+                ang = np.arccos(2 * np.power(np.dot(tf_quat(orn), tf_quat(new_orn)), 2) - 1) * 180.0 / np.pi
+                print('>>>> target name: {}'.format(self.target_name))
+
+                if self.target_name in self._filter_objects or ang > 50:
+                    self.target_name = 'noexists'
+                return []
+            else:
+                self.place_back_objects()
+                wall_file = os.path.join(self.root_dir,  'data/objects/box_box000/model_normalized.urdf')
+                wall_file2 = os.path.join(self.root_dir,  'data/objects/box_box001/model_normalized.urdf')
+                orn = p.getQuaternionFromEuler([0, 0, 0])
+                self.wall1_id = p.loadURDF(wall_file, self.table_pos[0] + 0.26, self.table_pos[1], self.table_pos[2] + 0.3,
+                                   orn[0], orn[1], orn[2], orn[3])
+                self.wall2_id = p.loadURDF(wall_file, self.table_pos[0] - 0.26, self.table_pos[1], self.table_pos[2] + 0.3,
+                                   orn[0], orn[1], orn[2], orn[3])
+                orn = p.getQuaternionFromEuler([0, 0, 1.57])
+                self.wall3_id = p.loadURDF(wall_file, self.table_pos[0], self.table_pos[1] + 0.26, self.table_pos[2] + 0.3,
+                                   orn[0], orn[1], orn[2], orn[3])
+                self.wall4_id = p.loadURDF(wall_file, self.table_pos[0], self.table_pos[1] - 0.26, self.table_pos[2] + 0.3,
+                                   orn[0], orn[1], orn[2], orn[3])
+                self.wall5_id = p.loadURDF(wall_file2, self.table_pos[0] + 0.17, self.table_pos[1] + 0.17, self.table_pos[2] + 0.33,
+                                   orn[0], orn[1], orn[2], orn[3])
+                self.wall6_id = p.loadURDF(wall_file2, self.table_pos[0] + 0.17, self.table_pos[1] - 0.17, self.table_pos[2] + 0.33,
+                                   orn[0], orn[1], orn[2], orn[3])
+                self.wall7_id = p.loadURDF(wall_file2, self.table_pos[0] - 0.17, self.table_pos[1] + 0.17, self.table_pos[2] + 0.33,
+                                   orn[0], orn[1], orn[2], orn[3])
+                self.wall8_id = p.loadURDF(wall_file2, self.table_pos[0] - 0.17, self.table_pos[1] - 0.17, self.table_pos[2] + 0.33,
+                                   orn[0], orn[1], orn[2], orn[3])
+                p.changeDynamics(self.wall1_id, linkIndex = -1, mass = 0)
+                p.changeDynamics(self.wall2_id, linkIndex = -1, mass = 0)
+                p.changeDynamics(self.wall3_id, linkIndex = -1, mass = 0)
+                p.changeDynamics(self.wall4_id, linkIndex = -1, mass = 0)
+                p.changeDynamics(self.wall5_id, linkIndex = -1, mass = 0)
+                p.changeDynamics(self.wall6_id, linkIndex = -1, mass = 0)
+                p.changeDynamics(self.wall7_id, linkIndex = -1, mass = 0)
+                p.changeDynamics(self.wall8_id, linkIndex = -1, mass = 0)
+                for i in range(len(urdfList)):
+                    xpos = 0.5 - self._shift[0] + 0.17 * (random.random() - 0.5)
+                    ypos = -self._shift[0] + 0.23 * (random.random() - 0.5)
+                    obj_path = '/'.join(urdfList[i][0].split('/')[:-1]) + '/'
+                    self.target_idx = self.obj_path.index(os.path.join(self.root_dir, obj_path))
+                    self.placed_objects[self.target_idx] = True
+                    self.target_name = urdfList[i][0].split('/')[-2]
+                    x_rot = 0
+                    z_init = -.26 + 2 * self.object_heights[self.target_idx]
+                    orn = p.getQuaternionFromEuler([x_rot, 0, np.random.uniform(-np.pi, np.pi)])
+                    p.resetBasePositionAndOrientation(self._objectUids[self.target_idx],
+                                                    [xpos, ypos,  z_init - self._shift[2]], [orn[0], orn[1], orn[2], orn[3]])
+                    p.resetBaseVelocity(
+                        self._objectUids[self.target_idx], (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)
+                    )
+                    for _ in range(350):
+                        p.stepSimulation()
+                for _ in range(1000):
+                    p.stepSimulation()
+                p.removeBody(self.wall1_id)
+                p.removeBody(self.wall2_id)
+                p.removeBody(self.wall3_id)
+                p.removeBody(self.wall4_id)
+                p.removeBody(self.wall5_id)
+                p.removeBody(self.wall6_id)
+                p.removeBody(self.wall7_id)
+                p.removeBody(self.wall8_id)
+                for _ in range(1000):
+                    p.stepSimulation()
+                pos, new_orn = p.getBasePositionAndOrientation(self._objectUids[self.target_idx])  # to target
+                ang = np.arccos(2 * np.power(np.dot(tf_quat(orn), tf_quat(new_orn)), 2) - 1) * 180.0 / np.pi
+                print('>>>> target name: {}'.format(self.target_name))
+
+                if self.target_name in self._filter_objects or ang > 50:
+                    self.target_name = 'noexists'
+                return []
+
     def _randomly_place_objects(self, urdfList, scale, poses=None):
         """
         Randomize positions of each object urdf.
@@ -407,7 +527,7 @@ class SimulatedYCBEnv():
         self.placed_objects[self.target_idx] = True
         self.target_name = urdfList[0].split('/')[-2]
         x_rot = 0
-        z_init = -.65 + 2 * self.object_heights[self.target_idx]
+        z_init = -.66 + 2 * self.object_heights[self.target_idx]
         orn = p.getQuaternionFromEuler([x_rot, 0, np.random.uniform(-np.pi, np.pi)])
         p.resetBasePositionAndOrientation(self._objectUids[self.target_idx],
                                           [xpos, ypos,  z_init - self._shift[2]], [orn[0], orn[1], orn[2], orn[3]])
